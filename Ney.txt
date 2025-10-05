@@ -1,3 +1,191 @@
+-- Script: ReplaceIsmailWithNeymar.lua
+-- ضع هذا السكربت داخل ServerScriptService
+-- يبدل "إسماعيل" أو "اسماعيل" -> "نيمار"
+-- ويبدل "Ismail" (أي حالة أحرف) -> "NEYMAR"
+-- يحاول المحافظة على حدود الكلمات ولا يغيّر أجزاء من كلمات أخرى
+
+local RunService = game:GetService("RunService")
+
+-- قائمة الخصائص النصية الشائعة التي نبحث فيها
+local textProperties = {
+    "Name",
+    "Text",
+    "Value",            -- StringValue.Value
+    "Tooltip",
+    "Title",
+    "PlaceholderText",
+    "TextLabel",
+}
+
+-- وظائف مساعدة
+local function isAsciiLetter(c)
+    local byte = string.byte(c)
+    if not byte then return false end
+    return (byte >= 65 and byte <= 90) or (byte >= 97 and byte <= 122)
+end
+
+-- يستبدل كل كلمة إنجليزية 'Ismail' بأي حالة إلى 'NEYMAR'
+local function replaceAsciiWordInsensitive(s, targetLower, replacement)
+    -- يستبدل كل تتابع أحرف ASCII (كلمة) ونفحصها بالمقارنة بالحروف الصغيرة
+    local new = s:gsub("(%a+)", function(word)
+        if string.lower(word) == targetLower then
+            return replacement
+        else
+            return word
+        end
+    end)
+    return new
+end
+
+-- يستبدل الحروف العربية 'إسماعيل' و 'اسماعيل' إلى 'نيمار'
+local function replaceArabicVariants(s)
+    if not s then return s end
+    -- نبدّل كل أشكال الاسم العربي (بدون تعديل على حالة لأن العربية لا تتغير حالة)
+    s = s:gsub("إسماعيل", "نيمار")
+    s = s:gsub("اسماعيل", "نيمار")
+    return s
+end
+
+-- الدالة الأساسية التي تأخذ سلسلة وتعيدها بعد الاستبدالات الذكية
+local function replaceNamesInString(s)
+    if type(s) ~= "string" then return s end
+    -- أولاً استبدالات العربية
+    local result = replaceArabicVariants(s)
+
+    -- ثم استبدالات الإنجليزية (كلمة بحروف ASCII كاملة)
+    result = replaceAsciiWordInsensitive(result, "ismail", "NEYMAR")
+
+    return result
+end
+
+-- يحاول تعديل كافة خواص النص داخل عنصر واحد
+local function fixInstanceTextProperties(inst)
+    if not inst then return end
+
+    -- نغير اسم الـ Instance نفسه إذا كان اسمه "Ismail"/"ismail"/أو بالعربية
+    if type(inst.Name) == "string" then
+        local newName = inst.Name
+        -- تحقق إن الاسم كامل (نتعامل مع حالات إنجليزي/عربي)
+        if string.lower(newName) == "ismail" then
+            inst.Name = "NEYMAR"
+        elseif newName == "إسماعيل" or newName == "اسماعيل" then
+            inst.Name = "نيمار"
+        else
+            -- لو الاسم يحتوي كلمات متعددة، نعمل استبدال داخلي (بحذر)
+            local replaced = replaceNamesInString(newName)
+            if replaced ~= newName then
+                -- لتجنب تغيير أسماء نظامية حساسة يمكن لفحص إضافي هنا
+                inst.Name = replaced
+            end
+        end
+    end
+
+    -- الآن نمر على خصائص محتملة قابلة للتعديل
+    for _, prop in ipairs({"Text", "Value", "Tooltip", "Title", "PlaceholderText"}) do
+        local success, val = pcall(function() return inst[prop] end)
+        if success and type(val) == "string" and val ~= "" then
+            local replaced = replaceNamesInString(val)
+            if replaced ~= val then
+                pcall(function() inst[prop] = replaced end)
+            end
+        end
+    end
+
+    -- بعض أنواع القيم الخاصة: StringValue, TextBox.Text وغيره
+    if inst:IsA("StringValue") then
+        local v = inst.Value
+        if type(v) == "string" then
+            local r = replaceNamesInString(v)
+            if r ~= v then
+                inst.Value = r
+            end
+        end
+    end
+end
+
+-- يغير DisplayName داخل Humanoid (يعرض اسم مختلف عن اسم الحساب)
+local function tryFixHumanoidDisplayName(inst)
+    if not inst then return end
+    if inst:IsA("Model") then
+        local humanoid = inst:FindFirstChildOfClass("Humanoid")
+        if humanoid and humanoid.DisplayName then
+            local curr = humanoid.DisplayName
+            local replaced = replaceNamesInString(curr)
+            if replaced ~= curr then
+                pcall(function() humanoid.DisplayName = replaced end)
+            end
+        end
+    end
+end
+
+-- يعالج عنصر واحد (يستبدل داخلياً حيثما أمكن)
+local function processInstance(inst)
+    -- حماية ضد nil
+    if not inst then return end
+    -- نقوم بمحاولات في Name + خصائص النص الشائعة
+    fixInstanceTextProperties(inst)
+    -- نحاول أيضا تعديل DisplayName في الـ Humanoid داخل النماذج (الشخصيات)
+    tryFixHumanoidDisplayName(inst)
+end
+
+-- يعالج كل العناصر الحالية عند بدء التشغيل
+for _, inst in ipairs(game:GetDescendants()) do
+    pcall(function() processInstance(inst) end)
+end
+
+-- نستمع للعناصر الجديدة التي تُضاف لاحقاً في اللعبة
+game.DescendantAdded:Connect(function(desc)
+    -- تأخير بسيط للتأكد من اكتمال خصائص الـ Instance الجديدة (لو يحتاج)
+    RunService.Heartbeat:Wait()
+    pcall(function() processInstance(desc) end)
+end)
+
+-- نراقب أيضاً تغيّر خصائص النص على العناصر الموجودة (نمطي بسيط)
+-- نستخدم ChangeHistoryService-like approach: مراقبة خاصية Name و Text و Value عبر connections
+local watchers = {}
+
+local function watchInstanceForPropertyChanges(inst)
+    if not inst or watchers[inst] then return end
+    watchers[inst] = true
+
+    -- نراقب خصائص شائعة التغيير
+    local propsToWatch = {"Name", "Text", "Value", "PlaceholderText", "Title", "Tooltip"}
+    for _, prop in ipairs(propsToWatch) do
+        -- حماية من محاولة الوصول لخاصية غير موجودة
+        if inst:GetAttribute and inst:GetAttribute(prop) ~= nil then
+            -- تخطينا استخدام Attributes هنا، نستخدم :GetPropertyChangedSignal إن أمكن
+        end
+        if inst:IsA("Instance") then
+            local ok, signal = pcall(function() return inst:GetPropertyChangedSignal(prop) end)
+            if ok and signal then
+                signal:Connect(function()
+                    pcall(function()
+                        local cur = inst[prop]
+                        if type(cur) == "string" then
+                            local r = replaceNamesInString(cur)
+                            if r ~= cur then
+                                pcall(function() inst[prop] = r end)
+                            end
+                        end
+                    end)
+                end)
+            end
+        end
+    end
+end
+
+-- نشغّل المراقبة لكل العناصر الحالية
+for _, inst in ipairs(game:GetDescendants()) do
+    pcall(function() watchInstanceForPropertyChanges(inst) end)
+end
+
+-- ونربط على الإضافات الجديدة
+game.DescendantAdded:Connect(function(desc)
+    pcall(function() watchInstanceForPropertyChanges(desc) end)
+end)
+
+print("[ReplaceIsmailWithNeymar] جاهز: تم فحص المحتوى الحالي وسيتم تعديل العناصر الجديدة تلقائياً.")
+
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
